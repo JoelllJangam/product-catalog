@@ -2,41 +2,87 @@
 
 namespace App\Repositories;
 
-use App\Models\Product;
+use App\BusinessObjects\ProductBO;
+use App\Repositories\Contracts\ProductRepositoryInterface;
+use Illuminate\Support\Facades\DB;
 
-class ProductRepository
+class ProductRepository implements ProductRepositoryInterface
 {
-    public function getProducts($limit = 10, $categoryId = null)
+    public function getProducts(int $perPage, ?int $categoryId): array
     {
-        $query = Product::query();
-
+        $query = DB::table('products');
         if ($categoryId) {
             $query->where('category_id', $categoryId);
         }
-
-        return $query->paginate($limit);
+        $products = $query->paginate($perPage)->items();
+        return array_map(fn($product) => $this->toBO($product), $products);
     }
 
-    public function findById($id)
+    public function getProductById(int $id): ?ProductBO
     {
-        return Product::find($id);
+        $product = DB::table('products')->where('id', $id)->first();
+        return $product ? $this->toBO($product) : null;
     }
 
-    public function createProduct(array $data)
+    public function createProduct(ProductBO $productBO): ProductBO
     {
-        return Product::createProduct($data);
+        $existingSku = DB::table('products')->where('sku', $productBO->sku)->exists();
+        if ($existingSku) {
+            throw new \Exception("SKU '{$productBO->sku}' already exists.");
+        }
+
+        $id = DB::table('products')->insertGetId([
+            'name' => $productBO->name,
+            'description' => $productBO->description,
+            'sku' => $productBO->sku,
+            'price' => $productBO->price,
+            'category_id' => $productBO->categoryId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return $this->getProductById($id);
     }
 
-    public function updateProduct(Product $product, array $data)
+    public function updateProduct(int $id, ProductBO $productBO): ProductBO
     {
-        $product->update($data);
-        return $product;
+
+        $existingProduct = DB::table('products')
+            ->where('sku', $productBO->sku)
+            ->where('id', '<>', $id)
+            ->exists();
+
+        if ($existingProduct) {
+            throw new \Exception("SKU '{$productBO->sku}' is already taken by another product.");
+        }
+
+        DB::table('products')->where('id', $id)->update([
+            'name' => $productBO->name,
+            'description' => $productBO->description,
+            'sku' => $productBO->sku,
+            'price' => $productBO->price,
+            'category_id' => $productBO->categoryId,
+            'updated_at' => now(),
+        ]);
+
+        return $this->getProductById($id);
     }
 
-    public function deleteProduct(Product $product)
+
+    public function deleteProduct(int $id): bool
     {
-        return $product->delete();
+        return DB::table('products')->where('id', $id)->delete() > 0;
     }
 
-
+    private function toBO($product): ProductBO
+    {
+        return new ProductBO(
+            $product->id,
+            $product->name,
+            $product->description,
+            $product->sku,
+            $product->price,
+            $product->category_id
+        );
+    }
 }

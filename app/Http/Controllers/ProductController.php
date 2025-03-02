@@ -2,86 +2,128 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use App\Repositories\ProductRepository;
-use App\Http\Resources\ProductResource;
-use App\Models\Product;
 
+use App\Repositories\Contracts\ProductRepositoryInterface;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Validator;
+use App\BusinessObjects\ProductBO;
 
 class ProductController extends Controller
 {
     protected $productRepository;
 
-    public function __construct(ProductRepository $productRepository)
+    public function __construct(ProductRepositoryInterface $productRepository)
     {
         $this->productRepository = $productRepository;
     }
 
-    public function getProducts(Request $request)
+    public function getProducts(): JsonResponse
     {
-        $categoryId = $request->query('category_id');
+        $categoryId = request()->query('category_id') ?? null;
         $products = $this->productRepository->getProducts(10, $categoryId);
-        return ProductResource::collection($products);
+        return response()->json($products);
     }
 
-    public function getProductById($id)
+    public function getProductById(int $id): JsonResponse
     {
-        $product = $this->productRepository->findById($id);
-
-        if (!$product) {
-            return response()->json(['message' => 'Product not found'], 404);
-        }
-
-        return new ProductResource($product);
-
+        $product = $this->productRepository->getProductById($id);
+        return $product ? response()->json($product) : response()->json(['error' => 'Product not found'], 404);
     }
 
-    public function createProduct(Request $request)
+
+    public function createProduct(Request $request): JsonResponse
     {
-        $data = $request->validate([
+        $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
-            'sku' => 'required|string|unique:products,sku|max:100',
+            'sku' => 'required|string|unique:products,sku|max:50',
             'price' => 'required|numeric|min:0',
-            'category_id' => 'required|exists:categories,id'
+            'category_id' => 'required|exists:categories,id',
         ]);
 
-        $product = $this->productRepository->createProduct($data);
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'Validation failed',
+                'messages' => $validator->errors()
+            ], 422);
+        }
 
-        return new ProductResource($product);
+        try {
+            $productBO = new ProductBO(
+                0,
+                $request->name,
+                $request->description,
+                $request->sku,
+                $request->price,
+                $request->category_id
+            );
 
+            $created = $this->productRepository->createProduct($productBO);
+
+            return response()->json($created, 201);
+        } catch (\Illuminate\Database\QueryException $e) {
+            return response()->json(['error' => 'Database error: ' . $e->getMessage()], 500);
+        } catch (\Exception $e) {
+            return response()->json(['error' => $e->getMessage()], 400);
+        }
     }
 
-    public function updateProduct(Request $request, $id)
+
+    public function updateProduct(Request $request, int $id): JsonResponse
     {
-        // Validate the request data
-        $data = $request->validate([
-            'name' => 'required|string|max:255',
+
+        $validator = Validator::make($request->all(), [
+            'name' => 'sometimes|string|max:255',
             'description' => 'nullable|string',
-            'sku' => "required|string|max:100|unique:products,sku,{$id}",
-            'price' => 'required|numeric|min:0',
-            'category_id' => 'required|exists:categories,id'
+            'sku' => 'sometimes|string|unique:products,sku,' . $id . '|max:50',
+            'price' => 'sometimes|numeric|min:0',
+            'category_id' => 'sometimes|exists:categories,id',
         ]);
-        $product = $this->productRepository->findById($id);
-        if (!$product) {
-            return response()->json(['message' => 'Product not found'], 404);
-        }
-        $updatedProduct = $this->productRepository->updateProduct($product, $data);
 
-        return new ProductResource($updatedProduct);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'error' => 'Validation failed',
+                'messages' => $validator->errors()
+            ], 422);
+        }
+
+        try {
+
+            $product = $this->productRepository->getProductById($id);
+            if (!$product) {
+                return response()->json(['error' => 'Product not found'], 404);
+            }
+
+
+            $productBO = new ProductBO(
+                $id,
+                $request->name ?? $product->name,
+                $request->description ?? $product->description,
+                $request->sku ?? $product->sku,
+                $request->price ?? $product->price,
+                $request->category_id ?? $product->categoryId
+            );
+
+
+            $updated = $this->productRepository->updateProduct($id, $productBO);
+            return response()->json($updated);
+        } catch (\Illuminate\Database\QueryException $e) {
+            return response()->json(['error' => 'Database error: ' . $e->getMessage()], 500);
+        } catch (\Exception $e) {
+            return response()->json(['error' => $e->getMessage()], 400);
+        }
     }
 
-    public function deleteProduct($id)
+    public function deleteProduct(int $id): JsonResponse
     {
-        $product = $this->productRepository->findById($id);
+        $deleted = $this->productRepository->deleteProduct($id);
 
-        if (!$product) {
-            return response()->json(['message' => 'Product not found'], 404);
+        if ($deleted) {
+            return response()->json(["message" => "Successfully Deleted"], 200);
         }
 
-        $this->productRepository->deleteProduct($product);
-
-        return response()->json(['message' => 'Product deleted successfully'], 200);
+        return response()->json(['error' => 'Product not found'], 404);
     }
-
 }
